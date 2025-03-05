@@ -11,7 +11,6 @@ export default async function Home() {
 
   return (
     <main className="h-screen overflow-hidden bg-white relative isolate">
-      {/* Background gradients */}
       <div className="absolute inset-x-0 -top-40 -z-10 transform-gpu overflow-hidden blur-3xl sm:-top-80">
         <div
           className="relative left-[calc(50%-11rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 rotate-[30deg] bg-gradient-to-tr from-[#ff80b5] to-[#9089fc] opacity-30 sm:left-[calc(50%-30rem)] sm:w-[72.1875rem]"
@@ -22,7 +21,6 @@ export default async function Home() {
         />
       </div>
 
-      {/* Centered content */}
       <div className="absolute inset-0 flex items-center justify-center px-6">
         <div className="text-center max-w-2xl mx-auto">
           <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl mb-6">
@@ -34,7 +32,7 @@ export default async function Home() {
           <div className="flex items-center justify-center gap-x-6">
             <Link
               href="/sign-up"
-              className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+              className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
             >
               Get started
             </Link>
@@ -45,7 +43,6 @@ export default async function Home() {
         </div>
       </div>
 
-      {/* Bottom gradient */}
       <div className="absolute inset-x-0 bottom-0 -z-10 transform-gpu overflow-hidden blur-3xl">
         <div
           className="relative left-[calc(50%+3rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 bg-gradient-to-tr from-[#ff80b5] to-[#9089fc] opacity-30 sm:left-[calc(50%+36rem)] sm:w-[72.1875rem]"

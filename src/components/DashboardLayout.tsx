@@ -4,14 +4,13 @@ import { Fragment, useState } from 'react';
 import { Dialog, Menu, Transition } from '@headlessui/react';
 import {
   Bars3Icon,
-  CalendarIcon,
   HomeIcon,
   UserCircleIcon,
-  XMarkIcon,
   ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { useClerk, useUser } from '@clerk/nextjs';
 import Link from 'next/link';
+import Image from 'next/image';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
@@ -134,10 +133,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <Menu.Button className="-m-1.5 flex items-center p-1.5">
                   <span className="sr-only">Open user menu</span>
                   {user?.imageUrl ? (
-                    <img
+                    <Image
                       className="h-8 w-8 rounded-full bg-gray-50"
                       src={user.imageUrl}
-                      alt=""
+                      alt="User profile"
+                      width={32}
+                      height={32}
+                      layout="intrinsic"
                     />
                   ) : (
                     <UserCircleIcon className="h-8 w-8 text-gray-400" aria-hidden="true" />

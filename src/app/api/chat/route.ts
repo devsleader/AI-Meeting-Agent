@@ -5,6 +5,7 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
+// Stored in-memory for a single session (will reset if server restarts)
 let meetingDetails: {
     attendee?: string;
     date?: string;
@@ -15,57 +16,73 @@ let meetingDetails: {
 
 export async function POST(req: Request) {
     try {
-        const { message, isInitial } = await req.json();
+        // We now expect { conversation: Message[], isInitial: boolean }
+        // where conversation is an array of { role: 'user' | 'assistant', content: string }
+        const { conversation = [], isInitial } = await req.json();
 
-        let systemPrompt = isInitial
-            ? "You are a professional AI assistant who is capable of both answering general inquiries and helping to schedule meetings via Calendly. Always respond in JSON format, keeping your responses brief, formal, and friendly. If no input is received, respond with a formal greeting that asks if the user needs help scheduling a meeting. For a greeting, use the following JSON format: { \"type\": \"greeting\", \"response\": \"your message\" }"
-            : `You are a professional AI assistant who is capable of both answering general inquiries and scheduling meetings. Analyze the user's message:
-            - If the message contains meeting scheduling information, extract the following details (if provided): 
-            - attendee (name of person to meet with)
-            - date (meeting date)
-            - time (meeting time)
-            - duration (meeting duration, default is 30 minutes)
-            - purpose (meeting agenda/purpose)
-            - If the message is a general inquiry (i.e., not meeting related), answer the question directly in a brief, formal, and friendly manner.
+        // Decide which system prompt to use
+        const systemPrompt = isInitial
+            ? `You are a professional AI assistant who is capable of both answering general inquiries
+         and helping to schedule meetings via Calendly. Always respond in JSON format,
+         keeping your responses brief, formal, and friendly. If no input is received,
+         respond with a formal greeting that asks if the user needs help scheduling a meeting.
+         For a greeting, use the following JSON format:
+         { "type": "greeting", "response": "your message" }`
+            : `You are a professional AI assistant who is capable of both answering general inquiries
+         and scheduling meetings. Analyze the user's message:
+         - If the message contains meeting scheduling information, extract the following details (if provided):
+           attendee, date, time, duration (default 30), purpose
+         - If the message is a general inquiry (not meeting-related), answer directly in a brief, formal, friendly manner.
 
-            When the message pertains to scheduling a meeting, use the current meeting details: ${JSON.stringify(meetingDetails)} and respond in JSON using the following format:
-            {
-            "type": "meeting_request",
-            "details": {
-                "attendee": "extracted or existing attendee name",
-                "date": "extracted or existing date",
-                "time": "extracted or existing time",
-                "duration": "extracted or existing duration",
-                "purpose": "extracted or existing purpose"
-            },
-            "missingInfo": ["list of still missing required information"],
-            "response": "a brief formal message asking only for the missing information"
-            }
+         When the message pertains to scheduling a meeting, use the current meeting details:
+         ${JSON.stringify(meetingDetails)}
+         and respond in JSON using:
+         {
+           "type": "meeting_request",
+           "details": {
+             "attendee": "...",
+             "date": "...",
+             "time": "...",
+             "duration": "...",
+             "purpose": "..."
+           },
+           "missingInfo": ["..."],
+           "response": "a brief formal message asking only for the missing information"
+         }
 
-            If the message is a general inquiry unrelated to scheduling a meeting, respond in JSON using this format:
-            {
-            "type": "general_response",
-            "response": "your brief formal answer"
-            }
+         If the message is unrelated to scheduling, respond in JSON with:
+         {
+           "type": "general_response",
+           "response": "your brief formal answer"
+         }
 
-            Always maintain professionalism and be helpful.`;
+         Always maintain professionalism and be helpful.
+      `;
+
+        // 1) Construct the messages array
+        const messages = [
+            { role: "system", content: systemPrompt },
+            // conversation is an array of { role: 'user'|'assistant', content: string }
+            ...conversation,
+        ];
 
         let aiResponse: string | null = null;
 
+        // 2) Send to OpenAI
         try {
             const completion = await openai.chat.completions.create({
                 model: "gpt-3.5-turbo",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: message || "No input received" }
-                ],
+                messages,
                 max_tokens: 200,
+                // If your version of the openai library supports response_format:
                 response_format: { type: "json_object" }
             });
 
             aiResponse = completion.choices[0].message.content;
             if (!aiResponse) {
-                return NextResponse.json({ response: "I apologize, but I couldn't process your request. Please try again." });
+                return NextResponse.json({
+                    response: "I apologize, but I couldn't process your request. Please try again."
+                });
             }
         } catch (error: unknown) {
             const err = error as Error;
@@ -76,12 +93,17 @@ export async function POST(req: Request) {
             );
         }
 
+        // 3) If it's not the initial prompt, parse the JSON and handle scheduling logic
         if (!isInitial) {
             try {
                 const parsedResponse = JSON.parse(aiResponse);
+
+                // Meeting request?
                 if (parsedResponse.type === "meeting_request" && parsedResponse.details) {
+                    // Merge new details with existing in-memory details
                     meetingDetails = { ...meetingDetails, ...parsedResponse.details };
 
+                    // If we have all details, check availability
                     if (parsedResponse.missingInfo && parsedResponse.missingInfo.length === 0) {
                         const isAvailable = await checkAvailability(
                             meetingDetails.date!,
@@ -89,28 +111,42 @@ export async function POST(req: Request) {
                             parseInt(meetingDetails.duration || '30')
                         );
                         if (!isAvailable) {
-                            return NextResponse.json({ response: "The requested time slot is not available. Please choose another date or time." });
+                            return NextResponse.json({
+                                response: "The requested time slot is not available. Please choose another date or time."
+                            });
                         }
-                        // const calendlyResponse = await createCalendlyEvent(meetingDetails);
+                        // If available, schedule via Calendly
                         const calendlyResponse = await createOneOffEvent(meetingDetails);
                         if (calendlyResponse.schedulingUrl) {
                             parsedResponse.response += `\n\nI've scheduled your meeting. You can find the details here: ${calendlyResponse.schedulingUrl}`;
+                            // Clear meeting details after scheduling
                             meetingDetails = {};
                         }
                     }
                     return NextResponse.json({ response: parsedResponse.response });
-                } else if (parsedResponse.type === "general_response" || parsedResponse.type === "greeting") {
+                }
+                // General response or greeting
+                else if (parsedResponse.type === "general_response" || parsedResponse.type === "greeting") {
                     return NextResponse.json({ response: parsedResponse.response });
-                } else {
-                    return NextResponse.json({ response: "Invalid response from the AI assistant. Please try again." });
+                }
+                // Unknown format
+                else {
+                    return NextResponse.json({
+                        response: "Invalid response from the AI assistant. Please try again."
+                    });
                 }
             } catch (error) {
                 console.error('Error parsing AI response:', error);
-                return NextResponse.json({ response: "Error processing the response. Please try again." });
+                return NextResponse.json({
+                    response: "Error processing the response. Please try again."
+                });
             }
         }
 
-        return NextResponse.json({ response: isInitial ? aiResponse : JSON.parse(aiResponse).response });
+        // 4) For the initial request, just return the AI's raw response or the parsed "response" property
+        return NextResponse.json({
+            response: isInitial ? aiResponse : JSON.parse(aiResponse).response
+        });
     } catch (error) {
         console.error('OpenAI API error:', error);
         return NextResponse.json(
@@ -120,6 +156,9 @@ export async function POST(req: Request) {
     }
 }
 
+// ------------------
+// Availability Check
+// ------------------
 async function checkAvailability(date: string, time: string, duration: number = 30): Promise<boolean> {
     try {
         const CALENDLY_API_KEY = process.env.CALENDLY_API_KEY;
@@ -161,9 +200,12 @@ async function checkAvailability(date: string, time: string, duration: number = 
             const eventStart = new Date(event.start_time);
             const eventEnd = new Date(event.end_time);
 
-            if ((requestedStart >= eventStart && requestedStart < eventEnd) ||
+            // If our requested window overlaps the event window, it's not available
+            if (
+                (requestedStart >= eventStart && requestedStart < eventEnd) ||
                 (requestedEnd > eventStart && requestedEnd <= eventEnd) ||
-                (requestedStart <= eventStart && requestedEnd >= eventEnd)) {
+                (requestedStart <= eventStart && requestedEnd >= eventEnd)
+            ) {
                 return false;
             }
         }
@@ -174,6 +216,9 @@ async function checkAvailability(date: string, time: string, duration: number = 
     }
 }
 
+// -------------------
+// Create One-Off Event
+// -------------------
 async function createOneOffEvent(details: {
     attendee?: string;
     date?: string;
@@ -190,7 +235,6 @@ async function createOneOffEvent(details: {
 
         const dateRange = details.date || "2025-01-01";
         const durationMinutes = parseDurationString(details.duration);
-
         const eventName = details.purpose || "One-Off Meeting";
 
         const locationPayload = {
@@ -224,9 +268,9 @@ async function createOneOffEvent(details: {
             console.error("Failed to create one-off event type:", errorText);
             return { error: "Failed to create one-off event type", details: errorText };
         }
+
         const createdEventTypeData = await createResponse.json();
         const schedulingUrl = createdEventTypeData.resource?.scheduling_url;
-
         if (!schedulingUrl) {
             return { error: "No scheduling URL returned by Calendly." };
         }
@@ -239,6 +283,9 @@ async function createOneOffEvent(details: {
     }
 }
 
+// ------------------
+// Parse Duration
+// ------------------
 function parseDurationString(durationStr: string | undefined): number {
     if (!durationStr) return 30;
 

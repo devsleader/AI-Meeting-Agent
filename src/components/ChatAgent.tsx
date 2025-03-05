@@ -7,7 +7,10 @@ export default function ChatAgent() {
 
     useEffect(() => {
         const SpeechRecognition =
-            (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+            (window as unknown as { SpeechRecognition?: typeof window.SpeechRecognition; webkitSpeechRecognition?: typeof window.SpeechRecognition })
+                .SpeechRecognition ||
+            (window as unknown as { webkitSpeechRecognition?: typeof window.SpeechRecognition })
+                .webkitSpeechRecognition;
 
         if (!SpeechRecognition) {
             console.warn('Speech Recognition API not supported in this browser.')
@@ -28,7 +31,7 @@ export default function ChatAgent() {
             }
         }
 
-        recognition.onerror = (event: any) => {
+        recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
             console.error('Speech recognition error', event.error)
         }
 

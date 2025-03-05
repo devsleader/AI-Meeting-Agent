@@ -123,8 +123,9 @@ export default function AIAgentChat() {
   };
 
   const startListening = () => {
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (agentState !== 'idle') return;
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
 
     const recognition = new SpeechRecognition();
@@ -133,34 +134,21 @@ export default function AIAgentChat() {
     recognition.lang = 'en-US';
 
     let finalTranscript = '';
-    let greetingSent = false; // Track if the greeting has already been spoken
-    let noInputTimer: number | null = null;
+    let hasUserSpoken = false;
+    let waitingTimer: number | null = null;
 
-    const clearNoInputTimer = () => {
-      if (noInputTimer !== null) {
-        clearTimeout(noInputTimer);
-        noInputTimer = null;
+    const clearWaitingTimer = () => {
+      if (waitingTimer !== null) {
+        clearTimeout(waitingTimer);
+        waitingTimer = null;
       }
     };
-
-    // Set a 5-second timer that is not active during speaking.
-    const setNoInputTimer = () => {
-      clearNoInputTimer();
-      noInputTimer = window.setTimeout(() => {
-        if (!greetingSent) {
-          // First 5-second timeout: No input detected; speak the greeting.
-          greetingSent = true;
-          setAgentState('speaking');
-          speakResponse(
-            'Hi, how are you? I am here to assist you in scheduling a meeting.',
-            false, // Do not reset state on speaking end.
-            () => {
-              // Only start waiting again after the greeting finishes speaking.
-              setNoInputTimer();
-            }
-          );
-        } else {
-          // Second 5-second timeout after greeting: No further input; stop listening.
+    const afterGreeting = () => {
+      setAgentState('listening');
+      setIsListening(true);
+      recognition.start();
+      waitingTimer = window.setTimeout(() => {
+        if (!hasUserSpoken) {
           recognition.stop();
           setAgentState('idle');
           setIsListening(false);
@@ -168,16 +156,17 @@ export default function AIAgentChat() {
       }, 5000);
     };
 
-    recognition.onstart = () => {
-      setAgentState('listening');
-      setIsListening(true);
-      setNoInputTimer();
-    };
+    setAgentState('speaking');
+    speakResponse(
+      'Hi, how are you? I am here to assist you in scheduling a meeting.',
+      false,
+      () => {
+        afterGreeting();
+      }
+    );
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      // Whenever some speech is detected, clear the no-input timer.
-      clearNoInputTimer();
-
+      clearWaitingTimer();
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
@@ -187,31 +176,49 @@ export default function AIAgentChat() {
       setTranscript(finalTranscript);
 
       if (finalTranscript.trim()) {
-        // Final user input detected: stop recognition and process the input.
+        hasUserSpoken = true;
         recognition.stop();
-        handleUserInput(finalTranscript.trim());
-        return;
+        handleUserInput(finalTranscript.trim()).then(() => {
+          finalTranscript = '';
+          recognition.start();
+          setAgentState('listening');
+          waitingTimer = window.setTimeout(() => {
+            if (!hasUserSpoken) {
+              recognition.stop();
+              setAgentState('idle');
+              setIsListening(false);
+            }
+          }, 5000);
+        });
+      } else {
+        waitingTimer = window.setTimeout(() => {
+          if (!hasUserSpoken) {
+            recognition.stop();
+            setAgentState('idle');
+            setIsListening(false);
+          }
+        }, 5000);
       }
-
-      // If no final input is yet available, restart the timer.
-      setNoInputTimer();
     };
 
     recognition.onerror = (event: any) => {
+      if (event.error === 'no-speech') {
+        console.log('No speech detected.');
+        return;
+      }
       console.error('Speech recognition error:', event.error);
-      clearNoInputTimer();
+      clearWaitingTimer();
       setIsListening(false);
       setAgentState('idle');
     };
 
     recognition.onend = () => {
-      clearNoInputTimer();
-      setIsListening(false);
-      setAgentState('idle');
+      clearWaitingTimer();
+      if (!hasUserSpoken) {
+        setIsListening(false);
+        setAgentState('idle');
+      }
     };
-
-    recognitionRef.current = recognition;
-    recognition.start();
   };
 
   return (
@@ -246,6 +253,7 @@ export default function AIAgentChat() {
       </div>
 
       <motion.button
+        disabled={agentState !== 'idle'}
         className={`absolute bottom-4 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-white font-medium shadow-lg cursor-pointer ${isListening ? 'bg-red-500 hover:bg-red-600' : 'bg-indigo-500 hover:bg-indigo-600'
           }`}
         whileHover={{ scale: 1.05, transition: { duration: 0.2 } }}
@@ -253,9 +261,13 @@ export default function AIAgentChat() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5, delay: 0.2 }}
-        onClick={startListening}
+        onClick={() => {
+          if (agentState === 'idle') {
+            startListening();
+          }
+        }}
       >
-        {isListening ? 'Listening...' : 'Start Speaking'}
+        {agentState === 'idle' ? 'Start Speaking' : 'Listening...'}
       </motion.button>
 
       <AnimatePresence mode="wait">

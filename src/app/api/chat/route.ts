@@ -83,11 +83,16 @@ export async function POST(req: Request) {
                     meetingDetails = { ...meetingDetails, ...parsedResponse.details };
 
                     if (parsedResponse.missingInfo && parsedResponse.missingInfo.length === 0) {
-                        const isAvailable = await checkAvailability(meetingDetails.date, meetingDetails.time);
+                        const isAvailable = await checkAvailability(
+                            meetingDetails.date!,
+                            meetingDetails.time!,
+                            parseInt(meetingDetails.duration || '30')
+                        );
                         if (!isAvailable) {
                             return NextResponse.json({ response: "The requested time slot is not available. Please choose another date or time." });
                         }
-                        const calendlyResponse = await createCalendlyEvent(meetingDetails);
+                        // const calendlyResponse = await createCalendlyEvent(meetingDetails);
+                        const calendlyResponse = await createOneOffEvent(meetingDetails);
                         if (calendlyResponse.schedulingUrl) {
                             parsedResponse.response += `\n\nI've scheduled your meeting. You can find the details here: ${calendlyResponse.schedulingUrl}`;
                             meetingDetails = {};
@@ -115,126 +120,139 @@ export async function POST(req: Request) {
     }
 }
 
-async function checkAvailability(date?: string, time?: string): Promise<boolean> {
+async function checkAvailability(date: string, time: string, duration: number = 30): Promise<boolean> {
     try {
-        if (!process.env.CALENDLY_API_KEY || !process.env.CALENDLY_EVENT_TYPE_URI) {
-            console.error('Missing Calendly API credentials');
+        const CALENDLY_API_KEY = process.env.CALENDLY_API_KEY;
+        const CALENDLY_USER_URI = process.env.CALENDLY_USER_URI;
+        if (!CALENDLY_API_KEY || !CALENDLY_USER_URI) {
+            console.error("Missing Calendly API credentials");
             return false;
         }
 
-        const startTime = `${date}T00:00:00Z`;
-        const endTime = `${date}T23:59:59Z`;
+        const minStartTime = `${date}T00:00:00Z`;
+        const maxStartTime = `${date}T23:59:59Z`;
 
-        const url = new URL('https://api.calendly.com/scheduled_events');
-        url.searchParams.append('user', process.env.CALENDLY_USER_URI || '');
-        url.searchParams.append('min_start_time', startTime);
-        url.searchParams.append('max_start_time', endTime);
-        url.searchParams.append('status', 'active');
+        const url = new URL("https://api.calendly.com/scheduled_events");
+        url.searchParams.append("user", CALENDLY_USER_URI);
+        url.searchParams.append("min_start_time", minStartTime);
+        url.searchParams.append("max_start_time", maxStartTime);
+        url.searchParams.append("status", "active");
 
         const response = await fetch(url.toString(), {
-            method: 'GET',
+            method: "GET",
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.CALENDLY_API_KEY}`
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${CALENDLY_API_KEY}`
             }
         });
-
         if (!response.ok) {
-            console.error('Failed to fetch scheduled events:', await response.text());
+            console.error("Failed to fetch scheduled events:", await response.text());
             return false;
         }
 
-        const scheduledEvents = await response.json();
+        const data = await response.json();
+        const requestedStart = new Date(`${date}T${time}`);
+        const requestedEnd = new Date(requestedStart);
+        requestedEnd.setMinutes(requestedEnd.getMinutes() + duration);
 
-        const requestedTimeStart = new Date(`${date}T${time}`);
-        const requestedTimeEnd = new Date(requestedTimeStart);
-        requestedTimeEnd.setMinutes(requestedTimeEnd.getMinutes() + (parseInt(meetingDetails.duration || '30')));
+        for (const event of data.collection) {
+            if (event.status !== "active") continue;
 
-        for (const event of scheduledEvents.collection) {
             const eventStart = new Date(event.start_time);
             const eventEnd = new Date(event.end_time);
 
-            if ((requestedTimeStart >= eventStart && requestedTimeStart < eventEnd) ||
-                (requestedTimeEnd > eventStart && requestedTimeEnd <= eventEnd) ||
-                (requestedTimeStart <= eventStart && requestedTimeEnd >= eventEnd)) {
+            if ((requestedStart >= eventStart && requestedStart < eventEnd) ||
+                (requestedEnd > eventStart && requestedEnd <= eventEnd) ||
+                (requestedStart <= eventStart && requestedEnd >= eventEnd)) {
                 return false;
             }
         }
-
         return true;
     } catch (error) {
-        console.error('Availability check error:', error);
+        console.error("Availability check error:", error);
         return false;
     }
 }
 
-async function createCalendlyEvent(details: {
+async function createOneOffEvent(details: {
     attendee?: string;
     date?: string;
     time?: string;
     duration?: string;
     purpose?: string;
-}): Promise<{ schedulingUrl?: string; eventType?: string; error?: string; details?: string }> {
+}): Promise<{ schedulingUrl?: string; error?: string; details?: string }> {
     try {
-        if (!process.env.CALENDLY_API_KEY || !process.env.CALENDLY_USER_URI) {
+        const CALENDLY_API_KEY = process.env.CALENDLY_API_KEY;
+        const CALENDLY_USER_URI = process.env.CALENDLY_USER_URI;
+        if (!CALENDLY_API_KEY || !CALENDLY_USER_URI) {
             return { error: 'Missing Calendly API credentials' };
         }
 
-        const eventTypeResponse = await fetch('https://api.calendly.com/event_types', {
-            method: 'GET',
+        const dateRange = details.date || "2025-01-01";
+        const durationMinutes = parseDurationString(details.duration);
+
+        const eventName = details.purpose || "One-Off Meeting";
+
+        const locationPayload = {
+            kind: "physical",
+            location: "Office",
+            additonal_info: ""
+        };
+
+        const createResponse = await fetch("https://api.calendly.com/one_off_event_types", {
+            method: "POST",
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.CALENDLY_API_KEY}`
-            }
-        });
-
-        if (!eventTypeResponse.ok) {
-            console.error('Failed to fetch event types:', await eventTypeResponse.text());
-            return { error: 'Failed to fetch Calendly event types' };
-        }
-
-        const eventTypesData = await eventTypeResponse.json();
-        const eventType = eventTypesData.collection[0];
-
-        if (!eventType) {
-            return { error: 'No event types found' };
-        }
-
-        const response = await fetch('https://api.calendly.com/scheduling_links', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.CALENDLY_API_KEY}`
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${CALENDLY_API_KEY}`
             },
             body: JSON.stringify({
-                max_event_count: 1,
-                owner: process.env.CALENDLY_USER_URI,
-                owner_type: 'users',
-                event_type: eventType.uri,
-                custom_questions: [
-                    { name: "Meeting Purpose", type: "text", position: 0, required: true, answer: details.purpose || 'Discussion' },
-                    { name: "Attendee Name", type: "text", position: 1, required: true, answer: details.attendee || 'Guest' }
-                ]
+                name: eventName,
+                host: CALENDLY_USER_URI,
+                duration: durationMinutes,
+                timezone: "Etc/UTC",
+                date_setting: {
+                    type: "date_range",
+                    start_date: dateRange,
+                    end_date: dateRange
+                },
+                location: locationPayload
             })
         });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Calendly API error response:', errorText);
-            return { error: 'Failed to create Calendly event', details: errorText };
+        if (!createResponse.ok) {
+            const errorText = await createResponse.text();
+            console.error("Failed to create one-off event type:", errorText);
+            return { error: "Failed to create one-off event type", details: errorText };
+        }
+        const createdEventTypeData = await createResponse.json();
+        const schedulingUrl = createdEventTypeData.resource?.scheduling_url;
+
+        if (!schedulingUrl) {
+            return { error: "No scheduling URL returned by Calendly." };
         }
 
-        const data = await response.json();
-
-        return {
-            schedulingUrl: data.resource.booking_url,
-            eventType: eventType.name
-        };
-    } catch (error: any) {
-        console.error('Calendly API error:', error);
-        return {
-            error: 'Failed to create meeting link',
-            details: error.message
-        };
+        return { schedulingUrl };
+    } catch (error: unknown) {
+        const err = error as Error;
+        console.error("Calendly API error:", err);
+        return { error: "Failed to create one-off event type", details: err.message };
     }
+}
+
+function parseDurationString(durationStr: string | undefined): number {
+    if (!durationStr) return 30;
+
+    const lower = durationStr.toLowerCase().trim();
+    const directNum = parseInt(lower, 10);
+
+    if (lower.includes("hour") || lower.includes("hr")) {
+        return directNum >= 1 ? directNum * 60 : 30;
+    }
+    if (lower.includes("min")) {
+        return directNum >= 5 ? directNum : 30;
+    }
+    if (!isNaN(directNum) && directNum > 0) {
+        return directNum < 5 ? 5 : directNum;
+    }
+    return 30;
 }

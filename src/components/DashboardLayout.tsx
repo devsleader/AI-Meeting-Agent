@@ -16,7 +16,6 @@ import Link from 'next/link';
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
   { name: 'AI Agent', href: '/dashboard/ai-agent', icon: ChatBubbleLeftRightIcon },
-  { name: 'Meetings', href: '/dashboard/meetings', icon: CalendarIcon },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

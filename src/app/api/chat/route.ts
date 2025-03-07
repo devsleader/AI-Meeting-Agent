@@ -5,7 +5,6 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-// Stored in-memory for a single session (will reset if server restarts)
 let meetingDetails: {
     attendee?: string;
     date?: string;
@@ -16,11 +15,8 @@ let meetingDetails: {
 
 export async function POST(req: Request) {
     try {
-        // We now expect { conversation: Message[], isInitial: boolean }
-        // where conversation is an array of { role: 'user' | 'assistant', content: string }
         const { conversation = [], isInitial } = await req.json();
 
-        // Decide which system prompt to use
         const systemPrompt = isInitial
             ? `You are a professional AI assistant who is capable of both answering general inquiries
          and helping to schedule meetings via Calendly. Always respond in JSON format,
@@ -59,22 +55,18 @@ export async function POST(req: Request) {
          Always maintain professionalism and be helpful.
       `;
 
-        // 1) Construct the messages array
         const messages = [
             { role: "system", content: systemPrompt },
-            // conversation is an array of { role: 'user'|'assistant', content: string }
             ...conversation,
         ];
 
         let aiResponse: string | null = null;
 
-        // 2) Send to OpenAI
         try {
             const completion = await openai.chat.completions.create({
                 model: "gpt-3.5-turbo",
                 messages,
                 max_tokens: 200,
-                // If your version of the openai library supports response_format:
                 response_format: { type: "json_object" }
             });
 
@@ -93,17 +85,13 @@ export async function POST(req: Request) {
             );
         }
 
-        // 3) If it's not the initial prompt, parse the JSON and handle scheduling logic
         if (!isInitial) {
             try {
                 const parsedResponse = JSON.parse(aiResponse);
 
-                // Meeting request?
                 if (parsedResponse.type === "meeting_request" && parsedResponse.details) {
-                    // Merge new details with existing in-memory details
                     meetingDetails = { ...meetingDetails, ...parsedResponse.details };
 
-                    // If we have all details, check availability
                     if (parsedResponse.missingInfo && parsedResponse.missingInfo.length === 0) {
                         const isAvailable = await checkAvailability(
                             meetingDetails.date!,
@@ -115,21 +103,17 @@ export async function POST(req: Request) {
                                 response: "The requested time slot is not available. Please choose another date or time."
                             });
                         }
-                        // If available, schedule via Calendly
                         const calendlyResponse = await createOneOffEvent(meetingDetails);
                         if (calendlyResponse.schedulingUrl) {
                             parsedResponse.response += `\n\nI've scheduled your meeting. You can find the details here: ${calendlyResponse.schedulingUrl}`;
-                            // Clear meeting details after scheduling
                             meetingDetails = {};
                         }
                     }
                     return NextResponse.json({ response: parsedResponse.response });
                 }
-                // General response or greeting
                 else if (parsedResponse.type === "general_response" || parsedResponse.type === "greeting") {
                     return NextResponse.json({ response: parsedResponse.response });
                 }
-                // Unknown format
                 else {
                     return NextResponse.json({
                         response: "Invalid response from the AI assistant. Please try again."
@@ -143,7 +127,6 @@ export async function POST(req: Request) {
             }
         }
 
-        // 4) For the initial request, just return the AI's raw response or the parsed "response" property
         return NextResponse.json({
             response: isInitial ? aiResponse : JSON.parse(aiResponse).response
         });
@@ -156,9 +139,6 @@ export async function POST(req: Request) {
     }
 }
 
-// ------------------
-// Availability Check
-// ------------------
 async function checkAvailability(date: string, time: string, duration: number = 30): Promise<boolean> {
     try {
         const CALENDLY_API_KEY = process.env.CALENDLY_API_KEY;
@@ -200,7 +180,6 @@ async function checkAvailability(date: string, time: string, duration: number = 
             const eventStart = new Date(event.start_time);
             const eventEnd = new Date(event.end_time);
 
-            // If our requested window overlaps the event window, it's not available
             if (
                 (requestedStart >= eventStart && requestedStart < eventEnd) ||
                 (requestedEnd > eventStart && requestedEnd <= eventEnd) ||
@@ -216,9 +195,6 @@ async function checkAvailability(date: string, time: string, duration: number = 
     }
 }
 
-// -------------------
-// Create One-Off Event
-// -------------------
 async function createOneOffEvent(details: {
     attendee?: string;
     date?: string;
@@ -283,9 +259,6 @@ async function createOneOffEvent(details: {
     }
 }
 
-// ------------------
-// Parse Duration
-// ------------------
 function parseDurationString(durationStr: string | undefined): number {
     if (!durationStr) return 30;
 
